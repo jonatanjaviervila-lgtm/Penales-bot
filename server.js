@@ -7,9 +7,10 @@ import { newGame, newSoloGame, select, publicState } from './game.js';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const token = process.env.BOT_TOKEN;
-const base = process.env.PUBLIC_URL?.replace(/\/$/, '');
+const base = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL)?.replace(/\/$/, '');
 const port = Number(process.env.PORT || 3000);
-if (!token || !base?.startsWith('https://')) { console.error('Configurá BOT_TOKEN y PUBLIC_URL con HTTPS.'); process.exit(1); }
+if (!token || !base?.startsWith('https://')) { console.error('Configurá BOT_TOKEN y una URL HTTPS (PUBLIC_URL o RENDER_EXTERNAL_URL).'); process.exit(1); }
+const webhookSecret = crypto.createHash('sha256').update(`penales-webhook:${token}`).digest('hex');
 const api = `https://api.telegram.org/bot${token}/`;
 const dataPath = process.env.DATA_FILE || path.join(root, 'games.json');
 let games = {};
@@ -93,6 +94,13 @@ async function readBody(req) { let body = ''; for await (const chunk of req) { b
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, base);
+    if (req.method === 'POST' && url.pathname === '/telegram/webhook') {
+      const received = req.headers['x-telegram-bot-api-secret-token'];
+      if (typeof received !== 'string' || received.length !== webhookSecret.length || !crypto.timingSafeEqual(Buffer.from(received), Buffer.from(webhookSecret))) { json(res, 403, { error: 'Firma inválida.' }); return; }
+      const update = await readBody(req);
+      await handleUpdate(update);
+      json(res, 200, { ok: true }); return;
+    }
     if (req.method === 'GET' && url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(fs.readFileSync(path.join(root, 'public', 'index.html'))); return; }
     if (req.method === 'GET' && url.pathname === '/dibu.png') { res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' }); res.end(fs.readFileSync(path.join(root, 'public', 'dibu.png'))); return; }
     if (req.method === 'GET' && url.pathname === '/health') { json(res, 200, { ok: true }); return; }
@@ -113,18 +121,9 @@ const server = http.createServer(async (req, res) => {
   } catch (e) { json(res, 400, { error: e.message }); }
 });
 server.listen(port, () => console.log(`Servidor escuchando en puerto ${port}`));
-async function polling() {
+async function setupWebhook() {
   botUsername = (await tg('getMe', {})).username;
-  await tg('deleteWebhook', { drop_pending_updates: false });
-  let offset = 0;
-  while (true) {
-    try {
-      const updates = await tg('getUpdates', { offset, timeout: 25, allowed_updates: ['message', 'callback_query'] });
-      for (const u of updates) {
-        offset = u.update_id + 1;
-        try { await handleUpdate(u); } catch (e) { console.error('Update', u.update_id, e); }
-      }
-    } catch (e) { console.error('Polling:', e.message); await new Promise(r => setTimeout(r, 3000)); }
-  }
+  await tg('setWebhook', { url: `${base}/telegram/webhook`, secret_token: webhookSecret, allowed_updates: ['message', 'callback_query'], max_connections: 1 });
+  console.log('Webhook configurado.');
 }
-polling().catch(e => { console.error(e); process.exit(1); });
+setupWebhook().catch(e => { console.error(e); process.exit(1); });
