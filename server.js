@@ -79,7 +79,7 @@ function validateInitData(raw) {
   const params = new URLSearchParams(raw);
   const hash = params.get('hash');
   if (!hash || !/^[0-9a-f]{64}$/i.test(hash)) throw Error('Firma inválida.');
-  const pairs = [...params.entries()].filter(([k]) => k !== 'hash' && k !== 'signature').sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  const pairs = [...params.entries()].filter(([k]) => k !== 'hash').sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
   const secret = crypto.createHmac('sha256', 'WebAppData').update(token).digest();
   const expected = crypto.createHmac('sha256', secret).update(pairs.map(([k, v]) => `${k}=${v}`).join('\n')).digest('hex');
   if (!crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(expected, 'hex'))) throw Error('Firma inválida.');
